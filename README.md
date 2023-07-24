@@ -1,2 +1,2 @@
 # certifications
-Repo for Harenss Certifications
+Repo for Harness Certifications
