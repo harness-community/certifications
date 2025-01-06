@@ -1,0 +1,116 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: harness-vault
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: json-configmap
+  namespace: harness-vault
+data:
+  config_vault.json: |
+    {"storage": {"file": {"path": "/vault/file"}}, "listener": [{"tcp": { "address": "0.0.0.0:8205", "tls_disable": true}}], "default_lease_ttl": "168h", "max_lease_ttl": "720h", "ui": true}
+
+
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vault
+  namespace: harness-vault
+  labels:
+    app: vault-server
+spec:
+  serviceName: vault-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vault-server
+  template:
+    metadata:
+      labels:
+        app: vault-server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsGroup: 1000
+        runAsUser: 100
+        fsGroup: 1000
+      volumes:
+        - name: home
+          emptyDir: {}
+      containers:
+        - name: vault          
+          image: hashicorp/vault:1.14
+          imagePullPolicy: IfNotPresent
+          args: ["server", "-dev"]   
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: VAULT_ADDR
+              value: "http://127.0.0.1:8205"
+            - name: VAULT_API_ADDR
+              value: "http://$(POD_IP):8205"                  
+            - name: SKIP_CHOWN
+              value: "true"
+            - name: SKIP_SETCAP
+              value: "true"
+            - name: HOME
+              value: "/home/vault"
+            - name: VAULT_DEV_ROOT_TOKEN_ID
+              value: "myharnesspwd"
+            - name: VAULT_LOCAL_CONFIG
+              valueFrom:
+                configMapKeyRef:
+                  name: json-configmap
+                  key: config_vault.json                           
+          volumeMounts:
+            - name: data
+              mountPath: /vault/data
+            - name: home
+              mountPath: /home/vault
+          ports:
+            - containerPort: 8205
+              name: http
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-ec", "vault status -tls-skip-verify"]
+            failureThreshold: 2
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 3
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+             storage: 123Mi
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-service
+  namespace: harness-vault
+spec:
+  type: NodePort
+  selector:
+    app: vault-server
+  ports:
+      # By default and for convenience, the `targetPort` is set to the same value as the `port` field.
+    - port: 8205
+      targetPort: 8205
+      # Optional field
+      # By default and for convenience, the Kubernetes control plane will allocate a port from a range (default: 30000-32767)
+      nodePort: 30005
